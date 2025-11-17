@@ -1,8 +1,9 @@
 use core::ffi::{c_char, c_int, c_long, c_void};
 
 use typed_jni::{
-    sys::{JNIEnv, JNINativeMethod},
-    Array, JString, LocalObject,
+    Array, LocalObject,
+    builtin::JavaString,
+    core::sys::{JNIEnv, JNINativeMethod},
 };
 
 #[cfg(feature = "v2")]
@@ -24,18 +25,18 @@ pub struct AppSpecializeArgs<'a> {
     #[cfg(any(feature = "v3", feature = "v4"))]
     pub rlimits: &'a mut LocalObject<'a, Array<Array<i32>>>,
     pub mount_external: &'a mut i32,
-    pub se_info: &'a mut LocalObject<'a, JString>,
-    pub nice_name: &'a mut LocalObject<'a, JString>,
-    pub instruction_set: &'a mut LocalObject<'a, JString>,
-    pub app_data_dir: &'a mut LocalObject<'a, JString>,
+    pub se_info: &'a mut LocalObject<'a, JavaString>,
+    pub nice_name: &'a mut LocalObject<'a, JavaString>,
+    pub instruction_set: &'a mut LocalObject<'a, JavaString>,
+    pub app_data_dir: &'a mut LocalObject<'a, JavaString>,
 
     // Optional arguments.
     #[cfg(any(feature = "v3", feature = "v4"))]
     pub fds_to_ignore: Option<&'a mut LocalObject<'a, Array<i32>>>,
     pub is_child_zygote: Option<&'a mut bool>,
     pub is_top_app: Option<&'a mut bool>,
-    pub pkg_data_info_list: Option<&'a mut Array<JString>>,
-    pub whitelisted_data_info_list: Option<&'a mut Array<JString>>,
+    pub pkg_data_info_list: Option<&'a mut Array<JavaString>>,
+    pub whitelisted_data_info_list: Option<&'a mut Array<JavaString>>,
     pub mount_data_dirs: Option<&'a mut bool>,
     pub mount_storage_dirs: Option<&'a mut bool>,
 }

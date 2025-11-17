@@ -10,7 +10,7 @@ use core::{
 
 use rustix::fd::{BorrowedFd, FromRawFd, OwnedFd};
 pub use sys::{AppSpecializeArgs, ServerSpecializeArgs};
-use typed_jni::Context;
+use typed_jni::core::JNIEnv;
 
 mod sys;
 
@@ -43,7 +43,7 @@ unsafe impl Sync for Api {}
 
 impl Api {
     unsafe fn new(table: *const sys::ApiTable) -> Api {
-        Api { table: &*table }
+        unsafe { Api { table: &*table } }
     }
 }
 
@@ -52,11 +52,7 @@ impl Api {
         unsafe {
             if let Some(c) = self.table.connect_companion {
                 let fd = c(self.table.api_impl);
-                if fd >= 0 {
-                    Some(OwnedFd::from_raw_fd(fd))
-                } else {
-                    None
-                }
+                if fd >= 0 { Some(OwnedFd::from_raw_fd(fd as _)) } else { None }
             } else {
                 None
             }
@@ -67,11 +63,7 @@ impl Api {
         unsafe {
             if let Some(f) = self.table.get_module_dir {
                 let fd = f(self.table.api_impl);
-                if fd >= 0 {
-                    Some(OwnedFd::from_raw_fd(fd))
-                } else {
-                    None
-                }
+                if fd >= 0 { Some(OwnedFd::from_raw_fd(fd as _)) } else { None }
             } else {
                 None
             }
@@ -102,16 +94,16 @@ impl Api {
 
     pub unsafe fn hook_jni_native_methods(
         &self,
-        ctx: &Context,
+        ctx: &JNIEnv,
         class_name: impl AsRef<str>,
-        mut methods: impl AsMut<[typed_jni::sys::JNINativeMethod]>,
+        mut methods: impl AsMut<[typed_jni::core::sys::JNINativeMethod]>,
     ) {
         unsafe {
             if let Some(f) = self.table.hook_jni_native_methods {
                 let class_name = CString::new(class_name.as_ref()).unwrap();
 
                 f(
-                    ctx.as_raw(),
+                    ctx.as_raw_ptr(),
                     class_name.as_ptr(),
                     methods.as_mut().as_mut_ptr(),
                     methods.as_mut().len() as c_int,
@@ -161,26 +153,22 @@ impl Api {
 
     #[cfg(feature = "v4")]
     pub fn exempt_fd(&self, fd: rustix::fd::RawFd) -> bool {
+        unsafe { if let Some(f) = self.table.exempt_fd { f(fd) } else { false } }
+    }
+
+    pub unsafe fn plt_hook_commit(&self) -> bool {
         unsafe {
-            if let Some(f) = self.table.exempt_fd {
-                f(fd)
+            if let Some(f) = self.table.plt_hook_commit {
+                f()
             } else {
                 false
             }
         }
     }
-
-    pub unsafe fn plt_hook_commit(&self) -> bool {
-        if let Some(f) = self.table.plt_hook_commit {
-            f()
-        } else {
-            false
-        }
-    }
 }
 
 pub trait Module<'a> {
-    fn new(api: Api, ctx: &'a Context) -> Self;
+    fn new(api: Api, ctx: &'a JNIEnv) -> Self;
 
     fn pre_app_specialize(&mut self, args: &mut AppSpecializeArgs<'a>);
     fn post_app_specialize(&mut self, args: &AppSpecializeArgs<'a>);
@@ -210,57 +198,67 @@ macro_rules! register_zygisk_companion {
 
 #[doc(hidden)]
 pub unsafe fn _module_entry<'a, M: Module<'a>>(api_table: *mut (), env: *mut ()) {
-    let module_abi = sys::ModuleAbi {
-        api_version: sys::ZYGISK_API_VERSION,
-        module_impl: null_mut(),
-        pre_app_specialize: {
-            unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *mut AppSpecializeArgs) {
-                if let Some(this) = this.cast::<M>().as_mut() {
-                    this.pre_app_specialize(core::mem::transmute(args));
+    unsafe {
+        let module_abi = sys::ModuleAbi {
+            api_version: sys::ZYGISK_API_VERSION,
+            module_impl: null_mut(),
+            pre_app_specialize: {
+                unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *mut AppSpecializeArgs) {
+                    unsafe {
+                        if let Some(this) = this.cast::<M>().as_mut() {
+                            this.pre_app_specialize(&mut *args.cast::<sys::AppSpecializeArgs<'_>>());
+                        }
+                    }
                 }
-            }
 
-            func::<M>
-        },
-        post_app_specialize: {
-            unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *const AppSpecializeArgs) {
-                if let Some(this) = this.cast::<M>().as_mut() {
-                    this.post_app_specialize(core::mem::transmute(args));
+                func::<M>
+            },
+            post_app_specialize: {
+                unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *const AppSpecializeArgs) {
+                    unsafe {
+                        if let Some(this) = this.cast::<M>().as_mut() {
+                            this.post_app_specialize(unsafe { &*args.cast::<sys::AppSpecializeArgs<'_>>() });
+                        }
+                    }
                 }
-            }
 
-            func::<M>
-        },
-        pre_server_specialize: {
-            unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *mut ServerSpecializeArgs) {
-                if let Some(this) = this.cast::<M>().as_mut() {
-                    this.pre_server_specialize(core::mem::transmute(args));
+                func::<M>
+            },
+            pre_server_specialize: {
+                unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *mut ServerSpecializeArgs) {
+                    unsafe {
+                        if let Some(this) = this.cast::<M>().as_mut() {
+                            this.pre_server_specialize(&mut *args.cast::<sys::ServerSpecializeArgs<'_>>());
+                        }
+                    }
                 }
-            }
 
-            func::<M>
-        },
-        post_server_specialize: {
-            unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *const ServerSpecializeArgs) {
-                if let Some(this) = this.cast::<M>().as_mut() {
-                    this.post_server_specialize(core::mem::transmute(args));
+                func::<M>
+            },
+            post_server_specialize: {
+                unsafe extern "C" fn func<'a, M: Module<'a>>(this: *mut c_void, args: *const ServerSpecializeArgs) {
+                    unsafe {
+                        if let Some(this) = this.cast::<M>().as_mut() {
+                            this.post_server_specialize(&*args.cast::<sys::ServerSpecializeArgs<'_>>());
+                        }
+                    }
                 }
-            }
 
-            func::<M>
-        },
-    };
+                func::<M>
+            },
+        };
 
-    let api_table = &mut *api_table.cast::<sys::ApiTable>();
-    let module_table = Box::into_raw(Box::new(module_abi));
-    if ((*api_table).register_module)(api_table, module_table) == 0 {
-        return;
+        let api_table = &mut *api_table.cast::<sys::ApiTable>();
+        let module_table = Box::into_raw(Box::new(module_abi));
+        if (api_table.register_module)(api_table, module_table) == 0 {
+            return;
+        }
+
+        (*module_table).module_impl = Box::into_raw(Box::new(M::new(Api::new(api_table), JNIEnv::from_raw(env.cast())))).cast();
     }
-
-    (*module_table).module_impl = Box::into_raw(Box::new(M::new(Api::new(api_table), Context::from_raw(env.cast())))).cast();
 }
 
 #[doc(hidden)]
 pub unsafe fn _companion_entry(client: c_int, handler: for<'fd> fn(stream: BorrowedFd<'fd>)) {
-    handler(BorrowedFd::borrow_raw(client))
+    handler(unsafe { BorrowedFd::borrow_raw(client as _) })
 }
